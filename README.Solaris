@@ -1,0 +1,7 @@
+Dependencies
+------------
+
+pyxattr-0.5.0 for Solaris (http://dev.gluster.com/~vikas/pyxattr-0.5.0-solaris.tar.gz)
+
+GNU findutils (pkg-get install findutils)
+rsync (pkg-get install rsync)

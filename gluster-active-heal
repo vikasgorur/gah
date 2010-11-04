@@ -42,6 +42,44 @@ REMOTE_FILELIST = "filelist.remote"
 
 PREFIX = ""
 
+FIND_CMD  = ""
+RSYNC_CMD = ""
+
+def locate_commands ():
+    "Locate the GNU find binary and the rsync binary"
+
+    global FIND_CMD
+    global RSYNC_CMD
+
+    p = subprocess.Popen ("uname", shell=True, stdout=subprocess.PIPE)
+    (output, err) = p.communicate ()
+
+    platform = output[:-1]    # strip out the newline
+
+    if platform == "Linux":
+        FIND_CMD  = "find"
+        RSYNC_CMD = "rsync"
+    elif platform == "SunOS":
+        FIND_CMD = "/opt/csw/bin/gfind"
+        try:
+            ret = subprocess.call (["/opt/csw/bin/gfind", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if ret != 0:
+                print "/opt/csw/bin/gfind appears to be not GNU find. Please install GNU findutils."
+                sys.exit (1)
+        except OSError, (errno, strerror):
+            print "Unable to run /opt/csw/bin/gfind (%s). Please make sure you have GNU findutils installed." % (strerror)
+            sys.exit (1)
+
+        RSYNC_CMD = "/opt/csw/bin/rsync --rsync-path=/opt/csw/bin/rsync"
+        try:
+            ret = subprocess.call (["/opt/csw/bin/rsync", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError, (errno, strerror):
+            print "Unable to run /opt/csw/bin/rsync (%s). Please make sure you have rsync installed." % (strerror)
+            sys.exit (1)
+    else:
+        print "Unknown platform '%s'" % platform
+        sys.exit (1)
+
 def verify_ssh (remote, user="root"):
     """Verify that password-less ssh works"""
     ret = subprocess.call (["ssh", "-o", "PasswordAuthentication=no", "-l", user, remote, "/bin/true"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -71,7 +109,7 @@ def generate_dir_list (local_path):
     except OSError:
         pass
 
-    cmd = "find %s -type d -printf %%P\\\\n|sort > %s" % (local_path, dirlist_path)
+    cmd = "%s %s -type d -printf %%P\\\\n|sort > %s" % (FIND_CMD, local_path, dirlist_path)
 
     if cmd_options.verbose:
         print "[gah] => %s" % cmd
@@ -88,7 +126,7 @@ def get_remote_dir_list (remote_host, remote_path):
 
     dirlist_path = GAH_RUNDIR + "/" + PREFIX + REMOTE_DIRLIST
 
-    cmd = "ssh root@%s 'find %s -type d -printf %%P\\\\n|sort > %s'" % (remote_host, remote_path, dirlist_path)
+    cmd = "ssh root@%s '%s %s -type d -printf %%P\\\\n|sort > %s'" % (remote_host, FIND_CMD, remote_path, dirlist_path)
     if cmd_options.verbose:
         print "[gah] => %s" % cmd
 
@@ -127,7 +165,7 @@ def rsync_missing_directory (dir, local_path, remote_host, remote_path):
     # Note: trailing slash on the src directory is very important. Without it
     # rsync will create "foo/foo"
 
-    cmd = "rsync -rav root@%s:%s/ %s" % (remote_host, remote_path + "/" + dir, local_path + "/" + dir)
+    cmd = "%s -rav root@%s:%s/ %s" % (RSYNC_CMD, remote_host, remote_path + "/" + dir, local_path + "/" + dir)
     if cmd_options.verbose:
         print "[gah] ==> %s" % cmd
 
@@ -298,7 +336,7 @@ def rsync_missing_file (file_line, dir, local_path, remote_host, remote_path, lo
 
         print "Healing file %s:%s -> %s" % (remote_host, remote_full_path, local_full_path)
 
-        cmd = "rsync -av root@%s:%s %s" % (remote_host, remote_full_path, local_full_path)
+        cmd = "%s -av root@%s:%s %s" % (RSYNC_CMD, remote_host, remote_full_path, local_full_path)
 
         if cmd_options.verbose:
             print "[gah] ==> %s" % cmd
@@ -328,7 +366,7 @@ def heal_file (remote_file_line, local_file_line, dir, local_path, remote_host, 
 
             print "Healing file %s:%s -> %s" % (remote_host, remote_full_path, local_full_path)
 
-            cmd = "rsync -av root@%s:%s %s" % (remote_host, remote_full_path, local_full_path)
+            cmd = "%s -av root@%s:%s %s" % (RSYNC_CMD, remote_host, remote_full_path, local_full_path)
 
             if cmd_options.verbose:
                 print "[gah] ==> %s" % cmd
@@ -435,6 +473,8 @@ def main ():
     if verify_ssh (remote_host) == False:
         print "Passwordless ssh to host '%s' failed." % remote_host
         sys.exit (1)
+
+    locate_commands ()
 
     make_prefix (local_vol, remote_vol)
 
