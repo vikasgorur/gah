@@ -1,0 +1,443 @@
+#!/usr/bin/env python
+
+# This file is part of GlusterFS.
+
+#    GlusterFS is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published
+#    by the Free Software Foundation; either version 3 of the License,
+#    or (at your option) any later version.
+
+#    GlusterFS is distributed in the hope that it will be useful, but
+#    WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#    General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see
+#    <http://www.gnu.org/licenses/>.
+
+import sys
+import os
+import math
+import time
+
+from optparse import OptionParser
+
+try:
+    import subprocess
+except:
+    print "Importing module 'subprocess' failed. Please make sure you have Python version >= 2.4 installed"
+    sys.exit (1)
+
+GAH_ROOT = "/opt/gluster/gah"
+GAH_RUNDIR = GAH_ROOT + "/run"
+
+GAH_FILELIST = GAH_ROOT + "/gah-filelist"
+GAH_RMXATTR  = GAH_ROOT + "/gah-rmxattr"
+
+LOCAL_DIRLIST   = "dirlist.local"
+REMOTE_DIRLIST  = "dirlist.remote"
+LOCAL_FILELIST  = "filelist.local"
+REMOTE_FILELIST = "filelist.remote"
+
+PREFIX = ""
+
+def verify_ssh (remote, user="root"):
+    """Verify that password-less ssh works"""
+    ret = subprocess.call (["ssh", "-o", "PasswordAuthentication=no", "-l", user, remote, "/bin/true"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if ret == 0:
+        return True
+    else:
+        return False
+
+# Keep these in global scope to prevent copying
+local_dir_list  = []
+remote_dir_list = []
+
+# command-line options
+cmd_options = {}
+
+
+def generate_dir_list (local_path):
+    try:
+        os.stat (local_path)
+    except OSError, (errno, strerror):
+        print "stat %s: %s" % (local_path, strerror)
+
+    dirlist_path = GAH_RUNDIR + "/" + PREFIX + LOCAL_DIRLIST
+    try:
+        # Delete any stale dirlist
+        os.unlink (dirlist_path)
+    except OSError:
+        pass
+
+    cmd = "find %s -type d -printf %%P\\\\n|sort > %s" % (local_path, dirlist_path)
+
+    if cmd_options.verbose:
+        print "[gah] => %s" % cmd
+
+    print ("Generating list of directories under %s ..." % local_path),
+
+    p = subprocess.Popen (cmd, shell=True)
+    p.wait ()
+    print "done."
+
+
+def get_remote_dir_list (remote_host, remote_path):
+    global cmd_options
+
+    dirlist_path = GAH_RUNDIR + "/" + PREFIX + REMOTE_DIRLIST
+
+    cmd = "ssh root@%s 'find %s -type d -printf %%P\\\\n|sort > %s'" % (remote_host, remote_path, dirlist_path)
+    if cmd_options.verbose:
+        print "[gah] => %s" % cmd
+
+    print ("Generating list of directories under %s on remote server %s ..." % (remote_path, remote_host)),
+
+    p = subprocess.Popen (cmd, shell=True)
+    p.wait ()
+    print "done."
+
+    cmd = "scp root@%s:%s %s" % (remote_host, dirlist_path, dirlist_path)
+    if cmd_options.verbose:
+        print "[gah] => %s" % cmd
+
+    print ("Copying list of directories under %s from remote server %s ..." % (remote_path, remote_host)),
+    p = subprocess.Popen (cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p.wait ()
+    print "done."
+
+
+def read_dir_lists ():
+    global local_dir_list
+    global remote_dir_list
+
+    localf = file (GAH_RUNDIR + "/" + PREFIX + LOCAL_DIRLIST)
+    local_dir_list = localf.readlines ()
+    localf.close ()
+
+    remotef = file (GAH_RUNDIR + "/" + PREFIX + REMOTE_DIRLIST)
+    remote_dir_list = remotef.readlines ()
+    remotef.close ()
+
+
+def rsync_missing_directory (dir, local_path, remote_host, remote_path):
+    global cmd_options
+
+    # Note: trailing slash on the src directory is very important. Without it
+    # rsync will create "foo/foo"
+
+    cmd = "rsync -rav root@%s:%s/ %s" % (remote_host, remote_path + "/" + dir, local_path + "/" + dir)
+    if cmd_options.verbose:
+        print "[gah] ==> %s" % cmd
+
+    p = subprocess.Popen (cmd, shell=True)
+    p.wait ()
+
+
+def generate_file_list (local_path, local_vol, remote_vol):
+    try:
+        os.stat (local_path)
+    except OSError, (errno, strerror):
+        print "stat %s: %s" % (local_path, strerror)
+
+    filelist_path = GAH_RUNDIR + "/" + PREFIX + LOCAL_FILELIST
+    try:
+        # Delete any stale filelist
+        os.unlink (filelist_path)
+    except OSError:
+        pass
+
+    cmd = "%s/gah-filelist %s %s %s | sort > %s" % (GAH_ROOT, local_path, local_vol, remote_vol, filelist_path)
+
+    if cmd_options.verbose:
+        print "[gah] => %s" % cmd
+
+    print ("Generating list of files under %s ..." % local_path),
+
+    p = subprocess.Popen (cmd, shell=True)
+    p.wait ()
+    print "done."
+
+
+def get_remote_file_list (remote_host, remote_path, local_vol, remote_vol):
+    global cmd_options
+
+    filelist_path = GAH_RUNDIR + "/" + PREFIX + REMOTE_FILELIST
+
+    cmd = "ssh root@%s '%s/gah-filelist %s %s %s |sort > %s'" % (remote_host, GAH_ROOT, remote_path, local_vol, remote_vol, filelist_path)
+    if cmd_options.verbose:
+        print "[gah] => %s" % cmd
+
+    print ("Generating list of files under %s on remote server %s ..." % (remote_path, remote_host)),
+
+    p = subprocess.Popen (cmd, shell=True)
+    p.wait ()
+    print "done."
+
+    cmd = "scp root@%s:%s %s" % (remote_host, filelist_path, filelist_path)
+    if cmd_options.verbose:
+        print "[gah] => %s" % cmd
+
+    print ("Copying list of files under %s from remote server %s ..." % (remote_path, remote_host)),
+    p = subprocess.Popen (cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p.wait ()
+    print "done."
+
+
+class AfrFile:
+    # AfrFile is an object that is built from one line of the file list. The line looks like this:
+    # file.1 F trusted.afr.test01=000000000000000000000000 trusted.afr.test02=000000000000000000000000
+    # name  type    xattr1                                   xattr2
+
+    # possible states for this file
+
+    AFR_INNOCENT = 0
+    AFR_IGNORANT = 1
+    AFR_FOOL     = 2
+    AFR_WISE     = 3
+    AFR_UNKNOWN  = 4
+
+    def __init__ (self, line, local_vol, remote_vol):
+        # build the object from the string in the filelist
+
+        (self.name, self.type, self.xattrs) = line.split (' ', 2)
+        (xattr1, xattr2) = self.xattrs.split (' ', 1)
+
+        if (xattr1.find (local_vol) > 0):
+            local_xattr  = xattr1
+            remote_xattr = xattr2
+        else:
+            local_xattr  = xattr2
+            remote_xattr = xattr1
+
+        pieces = local_xattr.split ('=', 1)
+        if pieces[1] == '':
+            self.local_pending  = None
+        else:
+            self.local_pending  = int (pieces[1][:8], 16)
+
+        pieces = remote_xattr.split ('=', 1)
+        if pieces[1] == '':
+            self.remote_pending = None
+        else:
+            self.remote_pending = int (pieces[1][:8], 16)
+
+    def state (self):
+        if (self.local_pending == None or self.remote_pending == None):
+            return AfrFile.AFR_IGNORANT
+
+        if (self.local_pending > 0):
+            return AfrFile.AFR_FOOL
+
+        elif (self.local_pending == 0 and self.remote_pending > 0):
+            return AfrFile.AFR_WISE
+
+        elif (self.local_pending == 0 and self.remote_pending == 0):
+            return AfrFile.AFR_INNOCENT
+
+        else:
+            return AfrFile.AFR_UNKNOWN
+
+def build_local_files_dict ():
+    local_files = dict ()
+
+    filelist_path = GAH_RUNDIR + "/" + PREFIX + LOCAL_FILELIST
+
+    try:
+        local_list = file (filelist_path, 'r')
+    except IOError, (errno, strerror):
+        print "Could not read local file list %s: %s" % (GAH_RUNDIR + "/" + LOCAL_FILELIST, strerror)
+        sys.exit (1)
+
+    for line in local_list:
+        fname = line.split (' ', 1)[0]
+        local_files[fname] = line
+
+    return local_files
+
+
+def clean_xattr (local_path, remote_host, remote_path, local_vol, remote_vol,
+                 rsync_start_time):
+    # clean out the xattrs if necessary
+
+    global cmd_options
+
+    now = time.time ()
+    timeout = int (math.ceil (now - rsync_start_time))
+
+    cmd = "ssh root@%s '%s %s %s %s %s'" % (remote_host, GAH_RMXATTR, remote_path,
+                                            timeout, local_vol, remote_vol)
+
+    if cmd_options.verbose:
+        print "[gah] => %s" % cmd
+
+    p = subprocess.Popen (cmd, shell=True)
+    ret = p.wait ()
+
+    if (ret == 0):
+        # we removed xattr on remote file, so remove it locally too
+        cmd = "%s %s %s %s %s" % (GAH_RMXATTR, local_path, 0, local_vol, remote_vol)
+
+        if cmd_options.verbose:
+            print "[gah] => %s" % cmd
+
+        p = subprocess.Popen (cmd, shell=True)
+        p.wait ()
+
+
+def rsync_missing_file (file_line, dir, local_path, remote_host, remote_path, local_vol, remote_vol):
+    global cmd_options
+    afr_file = AfrFile (file_line, local_vol, remote_vol)
+
+    if afr_file.type == 'F':
+        # we only heal regular files
+
+        remote_full_path = remote_path + "/" + dir + "/" + afr_file.name
+        local_full_path  = local_path  + "/" + dir + "/" + afr_file.name
+
+        print "Healing file %s:%s -> %s" % (remote_host, remote_full_path, local_full_path)
+
+        cmd = "rsync -av root@%s:%s %s" % (remote_host, remote_full_path, local_full_path)
+
+        if cmd_options.verbose:
+            print "[gah] ==> %s" % cmd
+
+        start_time = time.time ()
+
+        p = subprocess.Popen (cmd, shell=True)
+        p.wait ()
+
+        clean_xattr (local_full_path, remote_host, remote_full_path, local_vol, remote_vol, start_time)
+
+
+def heal_file (remote_file_line, local_file_line, dir, local_path, remote_host, remote_path, local_vol, remote_vol):
+    global cmd_options
+
+    local  = AfrFile (local_file_line, local_vol, remote_vol)   # beware - order is very important!
+    remote = AfrFile (remote_file_line, remote_vol, local_vol)
+
+    if remote.type == 'F':
+        # we only heal regular files
+
+        if (remote.state () == AfrFile.AFR_WISE) and not (local.state () == AfrFile.AFR_WISE):
+            # we only heal if we're sure local is sink and remote is source
+
+            remote_full_path = remote_path + "/" + dir + "/" + remote.name
+            local_full_path  = local_path + "/" + dir + "/" + local.name
+
+            print "Healing file %s:%s -> %s" % (remote_host, remote_full_path, local_full_path)
+
+            cmd = "rsync -av root@%s:%s %s" % (remote_host, remote_full_path, local_full_path)
+
+            if cmd_options.verbose:
+                print "[gah] ==> %s" % cmd
+
+            start_time = time.time ()
+
+            p = subprocess.Popen (cmd, shell=True)
+            p.wait ()
+
+            clean_xattr (local_full_path, remote_host, remote_full_path, local_vol, remote_vol, start_time)
+
+
+def heal_directory (dir, local_path, remote_host, remote_path, local_vol, remote_vol):
+    # Examine all the files in the directory (but not its subdirectories) and rsync those
+    # that need self-heal
+
+    local_dir  = os.path.join (local_path, dir)
+    remote_dir = os.path.join (remote_path, dir)
+
+    # generate the file list on both local and remote
+    generate_file_list (local_dir, local_vol, remote_vol)
+    get_remote_file_list (remote_host, remote_dir, local_vol, remote_vol)
+
+    local_files = build_local_files_dict ()
+
+    try:
+        remote_list_path = GAH_RUNDIR + "/" + PREFIX + REMOTE_FILELIST
+
+        remote_list = file (remote_list_path, 'r')
+    except IOError, (errno, strerror):
+        print "Could not read remote file list %s: %s" % (remote_list_path, strerror)
+        sys.exit (1)
+
+    for line in remote_list: # beware line contains '\n'
+        name = line.split (' ', 1)[0]
+        if not name in local_files:
+            # file doesn't exist locally, just rsync
+            rsync_missing_file (line.rstrip ('\n'), dir, local_path, remote_host, remote_path, local_vol, remote_vol)
+        else:
+            # file exists, self-heal appropriately
+            heal_file (line.rstrip ('\n'), local_files[name].rstrip ('\n'),
+                       dir, local_path, remote_host, remote_path, local_vol, remote_vol)
+
+def process_directories (local_path, remote_host, remote_path, local_vol, remote_vol):
+    for dir in remote_dir_list: # beware - dir contains the newline
+        if dir not in local_dir_list:
+            print "Directory '%s' missing on local volume, rsyncing" % dir[:-1]
+            rsync_missing_directory (dir.rstrip ('\n'), local_path, remote_host, remote_path)
+        else:
+            print "Processing '%s'" % dir[:-1]
+            heal_directory (dir.rstrip ('\n'), local_path, remote_host, remote_path, local_vol, remote_vol)
+
+
+def gluster_active_heal (local_path, remote_host, remote_path, local_vol, remote_vol):
+    generate_dir_list (local_path)
+    get_remote_dir_list (remote_host, remote_path)
+
+    read_dir_lists ()
+
+    process_directories (local_path, remote_host, remote_path, local_vol, remote_vol)
+
+
+def make_prefix (local_vol, remote_vol):
+    global PREFIX
+    global cmd_options
+
+    if cmd_options.name:
+        PREFIX = cmd_options.name + "." + local_vol + "-" + remote_vol + "."
+    else:
+        PREFIX = local_vol + "-" + remote_vol + "."
+
+
+def main ():
+    usage = "usage: %prog [-n NAME] <local-path> <remote-host>:<remote-path> <local-volume-name> <remote-volume-name>"
+    parser = OptionParser (usage=usage)
+
+    parser.add_option ("-v", "--verbose", dest="verbose", action="store_true", default=False,
+                       help="show verbose log of operations")
+    parser.add_option ("-n", "--name", dest="name", action="store", type="string",
+                       help="Unique name (needed when running multiple instances of gluster-active-heal)")
+
+    global cmd_options
+    (cmd_options, args) = parser.parse_args ()
+
+    if len (args) != 4:
+        parser.print_help ()
+        sys.exit (1)
+
+    local_path  = args[0].rstrip ("/")    # trim any trailing /
+
+    remote      = args[1].split (":", 1)
+
+    if len (remote) < 2 or remote[0] == '' or remote[1] == '':
+        print "host or path cannot be empty"
+        parser.print_help ()
+        sys.exit (1)
+
+    remote_host = remote[0]
+    remote_path = remote[1].rstrip ("/")   # trim any trailing /
+
+    local_vol   = args[2]
+    remote_vol  = args[3]
+
+    if verify_ssh (remote_host) == False:
+        print "Passwordless ssh to host '%s' failed." % remote_host
+        sys.exit (1)
+
+    make_prefix (local_vol, remote_vol)
+
+    gluster_active_heal (local_path, remote_host, remote_path, local_vol, remote_vol)
+
+main ()

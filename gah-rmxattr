@@ -1,0 +1,81 @@
+#!/usr/bin/env python
+
+# This file is part of GlusterFS.
+
+#    GlusterFS is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published
+#    by the Free Software Foundation; either version 3 of the License,
+#    or (at your option) any later version.
+
+#    GlusterFS is distributed in the hope that it will be useful, but
+#    WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#    General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see
+#    <http://www.gnu.org/licenses/>.
+
+import sys
+import os
+import time
+import stat
+
+try:
+    import xattr
+except ImportError:
+    print "Error importing module 'xattr'. Please make sure that the pyxattr package is installed"
+
+# usage: gah-rmxattr <file> <seconds> <local vol> <remote vol>
+
+# Remove afr extended attributes from file. If <seconds> > 0, remove the
+# attributes only if the file hasn't been modified in the last <seconds>.
+
+# If <seconds> = 0, remote the xattr unconditionally
+
+# Return status
+# 0   - removed successfully
+# 1   - did not remove due to mtime
+# 255 - error
+
+def usage (prog):
+    print "%s <file> <seconds> <local vol> <remote vol>" % prog
+    sys.exit (255)
+
+def rmxattr (fname, timeout, local, remote):
+    try:
+        mtime   = os.stat (fname).st_mtime
+        current = time.time ()
+
+        xattr1 = "trusted.afr." + local
+        xattr2 = "trusted.afr." + remote
+
+        if (timeout == 0) or (mtime + timeout < current):
+            xattr.remove (fname, xattr1)
+            xattr.remove (fname, xattr2)
+            return True
+    except:
+        sys.exit (255)
+
+    return False
+
+def main ():
+    if len (sys.argv) != 5:
+        usage (sys.argv[0])
+
+    fname = sys.argv[1]
+
+    try:
+        timeout = int (sys.argv[2])
+    except ValueError:
+        sys.exit (255)
+
+    local  = sys.argv[3]
+    remote = sys.argv[4]
+
+    if rmxattr (fname, timeout, local, remote):
+        sys.exit (0)
+    else:
+        sys.exit (1)
+
+main ()

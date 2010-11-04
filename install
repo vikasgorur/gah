@@ -1,0 +1,18 @@
+#!/bin/bash
+
+GAH_ROOT=/opt/gluster/gah
+
+# create runtime directory
+mkdir -p $GAH_ROOT
+mkdir -p $GAH_ROOT/run
+mkdir -p $GAH_ROOT/log
+
+cp ./gah-rmxattr $GAH_ROOT
+cp ./gah-filelist $GAH_ROOT
+cp ./gluster-active-heal $GAH_ROOT
+
+# install pyxattr
+
+#wget http://dev.gluster.com/fedora/releases/11/Everything/x86_64/os/Packages/pyxattr-0.4.0-3.fc11.x86_64.rpm
+
+#rpm -ivh pyxattr-0.4.0-3.fc11.x86_64.rpm

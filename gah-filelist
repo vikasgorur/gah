@@ -1,0 +1,94 @@
+#!/usr/bin/env python
+
+# This file is part of GlusterFS.
+
+#    GlusterFS is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published
+#    by the Free Software Foundation; either version 3 of the License,
+#    or (at your option) any later version.
+
+#    GlusterFS is distributed in the hope that it will be useful, but
+#    WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#    General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see
+#    <http://www.gnu.org/licenses/>.
+
+import sys
+import os
+import stat
+import binascii
+
+try:
+    import xattr
+except ImportError:
+    print "Error importing module 'xattr'. Please make sure that the pyxattr package is installed"
+
+def get_entry_type (fname):
+    """Return a one-character code for each entry type
+
+    D - Directory
+    F - Regular file
+    S - Symlink
+    O - Other"""
+
+    stbuf = os.lstat (fname)
+    mode  = stbuf.st_mode
+    type  = "-"
+
+    if stat.S_ISREG (mode):
+        type = "F"
+    elif stat.S_ISDIR (mode):
+        type = "D"
+    elif stat.S_ISLNK (mode):
+        type = "S"
+    else:
+        type = "O"
+
+    return type
+
+def get_xattrs (fname, vol1, vol2):
+    """Return two strings corresponding to the afr attributes of vol1 and vol2"""
+    key1   = "trusted.afr." + vol1
+    value1 = ""
+    key2   = "trusted.afr." + vol2
+    value2 = ""
+
+    try:
+        value1 = xattr.get (fname, key1)
+        value2 = xattr.get (fname, key2)
+
+    except IOError:
+        pass
+
+    return "%s=%s %s=%s" % (key1, binascii.hexlify (value1), key2, binascii.hexlify (value2))
+
+def dump_directory (dname, vol1, vol2):
+    for name in os.listdir (dname):
+        fname = dname + "/" + name
+        type = get_entry_type (fname)
+        xattrs = get_xattrs (fname, vol1, vol2)
+        print "%s %s %s" % (name, type, xattrs)
+
+def main ():
+    argc = len (sys.argv)
+
+    if argc != 4:
+        print "usage: %s <directory> <volume1> <volume2>" % sys.argv[0]
+        sys.exit (1)
+
+    vol1 = sys.argv[2]
+    vol2 = sys.argv[3]
+
+    try:
+        dump_directory (sys.argv[1], vol1, vol2)
+    except OSError, inst:
+        errno, strerror = inst.args
+        print "%s: %s: %s" % (sys.argv[0], inst.filename, strerror)
+        sys.exit (1)
+
+    pass
+
+main ()
