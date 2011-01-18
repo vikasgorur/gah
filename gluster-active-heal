@@ -250,16 +250,22 @@ class AfrFile:
             remote_xattr = xattr1
 
         pieces = local_xattr.split ('=', 1)
-        if pieces[1] == '':
-            self.local_pending  = None
+        if len(pieces) < 2:     # No extended attrs set ignore file
+            self.local_pending = None
         else:
-            self.local_pending  = int (pieces[1][:8], 16)
+            if pieces[1] == '':
+                self.local_pending  = None
+            else:
+                self.local_pending  = int (pieces[1][:8], 16)
 
         pieces = remote_xattr.split ('=', 1)
-        if pieces[1] == '':
+        if len(pieces) < 2:
             self.remote_pending = None
         else:
-            self.remote_pending = int (pieces[1][:8], 16)
+            if pieces[1] == '':
+                self.remote_pending = None
+            else:
+                self.remote_pending = int (pieces[1][:8], 16)
 
     def state (self):
         if (self.local_pending == None or self.remote_pending == None):

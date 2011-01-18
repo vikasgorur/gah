@@ -10,6 +10,7 @@ mkdir -p $GAH_ROOT/log
 cp ./gah-rmxattr $GAH_ROOT
 cp ./gah-filelist $GAH_ROOT
 cp ./gluster-active-heal $GAH_ROOT
+cp ./gluster-ls-splitbrained $GAH_ROOT
 
 # install pyxattr
 
